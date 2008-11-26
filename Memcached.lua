@@ -39,7 +39,7 @@ end
 local function _select_server(cache, key)
     local server_count = #cache.servers
 
-    local hashfunc = CRC32.Hash
+    local hashfunc = cache.hash or CRC32.Hash
 
     if server_count == 1 then
 	return cache.servers[1].socket
@@ -254,6 +254,10 @@ local function disconnect_all(cache)
     end    
 end
 
+local function set_hash(cache, hashfunc)
+    cache.hash = hashfunc
+end
+
 function Connect(hostlist, port)
     local servers = {}
 
@@ -318,6 +322,9 @@ function Connect(hostlist, port)
 
     local cache = {
 	servers = servers,
+
+	set_hash = set_hash,
+	hash = nil,
 
 	set = set,
 	add = add,
@@ -416,3 +423,6 @@ end
 --  memcache:disconnect_all()
 --     Closes all cached sockets to all memcached servers.
 --
+--  memcache:set_hash(hashfunc)
+--     Sets a custom hash function for key values. The default is a CRC32 hashing function.
+--     'hashfunc' should be defined receiving a single string parameter and returing a single integer value.
