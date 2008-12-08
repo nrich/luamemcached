@@ -164,6 +164,10 @@ end
 --
 -- require('CRC32')
 --
+-- crchash = CRC32.Hash('a string')
+--
+-- Methods:
+--
 -- hashval = CRC32.Hash(val)
 --    Calculates and returns (as an integer) the CRC32 hash of the parameter 'val'. 
 
