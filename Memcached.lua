@@ -32,6 +32,12 @@ local STATS_KEYS = {
     items = true,
 }
 
+local FLAGS = {
+    'STORABLE',
+    'COMPRESSED',
+    'SERIALISED',
+}
+
 local function warn(str)
     io.stderr:write(string.format('%s\n', tostring(str)))
 end
@@ -42,20 +48,20 @@ local function _select_server(cache, key)
     local hashfunc = cache.hash or CRC32.Hash
 
     if server_count == 1 then
-	    return cache.servers[1].socket
+	return cache.servers[1].socket
     else
-	    local serverhash = hashfunc(key)
+	local serverhash = hashfunc(key)
 
-	    for i = 0, SERVER_RETRIES do
-	        local index = (serverhash % server_count) + 1
-	        local server = cache.servers[index].socket
+	for i = 0, SERVER_RETRIES do
+	    local index = (serverhash % server_count) + 1
+	    local server = cache.servers[index].socket
 
-	        if not server then
-		        serverhash = hashfunc(serverhash .. i)
-	        else
-		        return server
-	        end
+	    if not server then
+		serverhash = hashfunc(serverhash .. i)
+	    else
+		return server
 	    end
+	end
     end
 
     error('No servers found')
@@ -68,53 +74,65 @@ local function _retrieve(cache, key, str)
     server:send(str .. '\r\n')
 
     local function toboolean(value)
-	    if type(value) == 'string' then
-	        if value == 'true' then
-		        return true
-	        elseif value == 'false' then
-		        return false 
-	        end
+	if type(value) == 'string' then
+	    if value == 'true' then
+		return true
+	    elseif value == 'false' then
+		return false 
 	    end
+	end
 
-	    return nil
+	return nil
     end
 
-    local data = {}
-    local key = nil
-    while true do
-	    local line, err = server:receive()
+    local function extract_flags(str)
+	local num = tonumber(str)
+	local flags = {}
 
-	    if line == 'END' then
-	        break
-	    elseif string.sub(line, 1, 5) == 'VALUE' then
-	        key = string.match(line, 'VALUE (%S+)')
+	for i = table.maxn(FLAGS), 1, -1 do
+	    local bf = 2 ^ (i - 1)
 
-	        data[key] = {}
-	    else
-	        table.insert(data[key], line)
+	    if num >= bf then
+		flags[FLAGS[i]] = true
+		num = num - bf
 	    end
+	end
+
+	return flags
     end
 
     local returndata = {}
-    for k,d in pairs(data) do
-	    if d then
-	        local ldata
+    while true do
+	local line, err = server:receive()
 
-	        if #d == 1 then
-		        ldata = tonumber(d[1]) or toboolean(d[1])
-		        if ldata == nil then
-		            if  d[1] == 'nil' then
-			            ldata = nil
-		            else
-			            ldata = d[1]
-		            end
-		        end
-	        else
-		        ldata = table.concat(data[k], '\n')
-	        end
+	if line == 'END' then
+	    break
+	elseif string.sub(line, 1, 5) == 'VALUE' then
+	    local key,flagstr,size,cas = string.match(line, 'VALUE (%S+) (%d+) (%d+)')
+	    flags = extract_flags(flagstr)
 
-	        returndata[k] = ldata
+	    local data = server:receive(size)
+
+	    if flags.COMPRESSED and cache.compress_enabled then
+		data = cache.decompress(data)
 	    end
+
+            if flags.SERIALISED then
+                returndata[key] = cache.decode(data)
+            else
+                local ldata = tonumber(data) or toboolean(data) 
+
+                if ldata == nil then
+                    if data == 'nil' then
+                        returndata[key] = nil
+                    else
+                        returndata[key] = data
+                    end
+                else
+                    returndata[key] = ldata
+                end
+            end
+	end
     end
 
     return returndata
@@ -130,18 +148,39 @@ local function _send(cache, key, str)
 end
 
 local function _store(cache, op, key, value, expiry)
-    local str = tostring(value)
+    local str
+    local flags = 0
+
+    if type(value) == 'table' then
+	str = cache.encode(value)    
+	-- TODO lookup rather than hard code 
+        flags = flags + 4
+    else
+	str = tostring(value)
+    end
+
+    if cache.compress_enabled and string.len(str) > cache.compress_threshold then
+	local cstr = cache.compress(str)
+
+	if string.len(cstr) < (string.len(str) * 0.8) then
+	    str = cstr
+
+	    -- TODO lookup rather than hard code 
+	    flags = flags + 2
+	end
+    end
+
     local len = string.len(str)
 
     expiry = expiry or 0
 
-    local cmd = op .. ' ' .. key .. ' 0 ' .. expiry .. ' ' .. len .. '\r\n' .. str
+    local cmd = op .. ' ' .. key .. ' ' .. flags .. ' ' .. expiry .. ' ' .. len .. '\r\n' .. str
 
     local res = _send(cache, key, cmd)
 
     if res ~= 'STORED' then
-	    error("Error storing '" .. key .. "': " .. res)
-	    return false
+	error("Error storing '" .. key .. "': " .. res)
+	return false
     end
 
     return true
@@ -168,12 +207,12 @@ local function delete(cache, key)
     local res = _send(cache, key, 'delete ' .. key)
 
     if res == 'NOT_FOUND' then
-	    return false
+	return false
     end
 
     if res ~= 'DELETED' then
-	    error("Error deleting '" .. key .. "': " .. res)
-	    return false
+	error("Error deleting '" .. key .. "': " .. res)
+	return false
     end
 
     return true
@@ -185,7 +224,7 @@ local function incr(cache, key, val)
     local res = _send(cache, key, 'incr ' .. key .. ' ' .. val)
 
     if res == 'ERROR' or res == 'CLIENT_ERROR' then
-	    error("Error incrementing '" .. key .. "': " .. res)
+	error("Error incrementing '" .. key .. "': " .. res)
     end
 
     return res
@@ -197,7 +236,7 @@ local function decr(cache, key, val)
     local res = _send(cache, key, 'decr ' .. key .. ' ' .. val)
 
     if res == 'ERROR' or res == 'CLIENT_ERROR' then
-	    error("Error incrementing '" .. key .. "': " .. res)
+	error("Error incrementing '" .. key .. "': " .. res)
     end
 
     return res
@@ -209,29 +248,29 @@ local function stats(cache, key)
     key = key or ''
 
     if string.len(key) > 0 and not STATS_KEYS[key] then
-	    error(string.format("Unknown stats key '%s'", key))
+	error(string.format("Unknown stats key '%s'", key))
     end
 
     for i,server in pairs(cache.servers) do
-	    server.socket:send('stats ' .. key .. '\r\n')
+	server.socket:send('stats ' .. key .. '\r\n')
 
-	    local stats = {}
+	local stats = {}
 
-	    while true do
-	        local line, err = server.socket:receive()
+	while true do
+	    local line, err = server.socket:receive()
 
-	        if line == 'END' or line == 'ERROR' then
-		        break
-	        end
-
-	        local k,v = string.match(line, 'STAT (%S+) (%S+)')
-
-	        if k then
-		        stats[k] = v
-	        end
+	    if line == 'END' or line == 'ERROR' then
+		break
 	    end
 
-	    servers[server.name] = stats
+	    local k,v = string.match(line, 'STAT (%S+) (%S+)')
+
+	    if k then
+		stats[k] = v
+	    end
+	end
+
+	servers[server.name] = stats
     end
 
     return servers
@@ -239,16 +278,17 @@ end
 
 local function get_multi(cache, ...)
     local dataset = nil
-    if table.maxn(cache.servers) > 1 then
-	    dataset = {}
 
-	    for i,k in ipairs(arg) do
-	        local data = _retrieve(cache, k, 'get ' .. k)
-	        dataset[k] = data[k]
-	    end
+    if table.maxn(cache.servers) > 1 then
+	dataset = {}
+
+	for i,k in ipairs(arg) do
+	    local data = _retrieve(cache, k, 'get ' .. k)
+	    dataset[k] = data[k]
+	end
     else
-	    local keys = table.concat(arg, ' ')
-	    dataset = _retrieve(cache, keys, 'get ' .. keys)
+	local keys = table.concat(arg, ' ')
+	dataset = _retrieve(cache, keys, 'get ' .. keys)
     end
 
     return dataset
@@ -258,12 +298,12 @@ local function flush_all(cache)
     local success = true
 
     for i,server in ipairs(cache.servers) do
-	    server.socket:send('flush_all\r\n')
-	    local res = assert(server.socket:receive())
+	server.socket:send('flush_all\r\n')
+	local res = assert(server.socket:receive())
 
-	    if res ~= 'OK' then
-	        success = false
-	    end
+	if res ~= 'OK' then
+	    success = false
+	end
     end
 
     return success
@@ -271,13 +311,13 @@ end
 
 local function disconnect_all(cache)
     while true do
-	    local server = table.remove(cache.servers)
+	local server = table.remove(cache.servers)
 
-	    if not server then
-	        break
-	    end
+	if not server then
+	    break
+	end
 
-	    server.socket:close()
+	server.socket:close()
     end    
 end
 
@@ -285,86 +325,137 @@ local function set_hash(cache, hashfunc)
     cache.hash = hashfunc
 end
 
+local function set_encode(cache, func)
+    cache.encode = func
+end
+
+local function set_decode(cache, func)
+    cache.decode = func
+end
+
+local function set_compress(cache, func)
+    cache.compress = func
+end
+
+local function set_decompress(cache, func)
+    cache.decompress = func
+end
+
 function Connect(hostlist, port)
     local servers = {}
 
     if type(hostlist) == 'table' then
-	    for i,host in pairs(hostlist) do
-	        local h, p
+	for i,host in pairs(hostlist) do
+	    local h, p
 
-	        if type(host) == 'table' then
-		        h = host[1]
-		        p = host[2]
-	        elseif type(host) == 'string' then
-		        h = host
-	        elseif type(host) == 'number' then
-		        p = host
-		        h = nil
-	        end
-
-	        if not h then
-		        h = '127.0.0.1'
-	        end
-
-	        if not p then 
-		        p = 11211
-	        end
-
-	        local server = socket.connect(h, p)
-
-	        if not server then
-		        warn('Could not connect to ' .. h .. ':' .. p)
-	        else
-		        table.insert(servers, {socket = server, name = string.format('%s:%d', h, p)})
-	        end
-	    end
-    else
-	    local address = hostlist
-
-	    if type(address) == 'number' then
-	        port = address
-	        address = nil
+	    if type(host) == 'table' then
+		h = host[1]
+		p = host[2]
+	    elseif type(host) == 'string' then
+		h = host
+	    elseif type(host) == 'number' then
+		p = host
+		h = nil
 	    end
 
-	    if address == nil then
-	        address = '127.0.0.1'
+	    if not h then
+		h = '127.0.0.1'
 	    end
 
-	    if port == nil then
-	        port = 11211
+	    if not p then 
+		p = 11211
 	    end
 
-	    local server = socket.connect(address, port)
+	    local server = socket.connect(h, p)
 
 	    if not server then
-	        warn('Could not connect to ' .. address .. ':' .. port)
+		warn('Could not connect to ' .. h .. ':' .. p)
 	    else
-	        servers = {{socket = server, name = string.format('%s:%d', address, port)}}
+		table.insert(servers, {socket = server, name = string.format('%s:%d', h, p)})
 	    end
+	end
+    else
+	local address = hostlist
+
+	if type(address) == 'number' then
+	    port = address
+	    address = nil
+	end
+
+	if address == nil then
+	    address = '127.0.0.1'
+	end
+
+	if port == nil then
+	    port = 11211
+	end
+
+	local server = socket.connect(address, port)
+
+	if not server then
+	    warn('Could not connect to ' .. address .. ':' .. port)
+	else
+	    servers = {{socket = server, name = string.format('%s:%d', address, port)}}
+	end
     end
 
     if table.maxn(servers) < 1 then
-	    error('No servers available')
+	error('No servers available')
     end
 
     local cache = {
-	    servers = servers,
+	servers = servers,
 
-	    set_hash = set_hash,
-	    hash = nil,
+	set_hash = set_hash,
+	set_encode = set_encode,
+	set_decode = set_decode,
+	set_decompress = set_decompress,
+	set_compress = set_compress,
 
-	    set = set,
-	    add = add,
-	    replace = replace,
-	    get = get,
-	    delete = delete,
-	    incr = incr,
-	    decr = decr,
+	compress_enabled = false,
+	enable_compression = function(self, on)
+	    self.compress_enabled = on
+	end,
 
-	    get_multi = get_multi,
-	    stats = stats,
-	    flush_all = flush_all,
-	    disconnect_all = disconnect_all,
+	hash = nil,
+	encode = function()
+	    error('No encode function set')
+	end,
+
+	decode = function()
+	    error('No decode function set')
+	end,
+
+	compress = function()
+	    error('No compress function set')
+	end,
+
+	decompress = function()
+	    error('No decompress function set')
+	end,
+
+	-- 10K default
+	compress_threshold = 10240,
+	set_compress_threshold = function(self, threshold)
+	    if threshold == nil then
+		self:enable_compression(false)
+	    else
+		self.compress_threshold = threshold
+	    end
+	end,
+
+	set = set,
+	add = add,
+	replace = replace,
+	get = get,
+	delete = delete,
+	incr = incr,
+	decr = decr,
+
+	get_multi = get_multi,
+	stats = stats,
+	flush_all = flush_all,
+	disconnect_all = disconnect_all,
     }
 
     return cache
@@ -453,3 +544,26 @@ end
 --  memcache:set_hash(hashfunc)
 --     Sets a custom hash function for key values. The default is a CRC32 hashing function.
 --     'hashfunc' should be defined receiving a single string parameter and returing a single integer value.
+--
+--  memcache:set_encode(func)
+--     Sets a custom encode function for serialising table values. 'func' should be defined receiving a single
+--     table value and returning a single string value.
+--
+--  memcache:set_decode(func)
+--     Sets a custom decode function for deserialising table values. 'func' should be defined receiving a 
+--     single single and returning a single table value
+--
+--  memcache:enable_compression(onflag)
+--     Turns data compression support on or off.
+--
+--  memcache:set_compress_threshold(size)
+--     Set the compression threshold. If the value to be stored is larger than `size' bytes (and compression 
+--     is enabled), compress before storing.
+--
+--  memcache:set_compress(func)
+--     Sets a custom data compression function. 'func' should be defined receiving a single string value and
+--     returning a single string value.
+--
+--  memcache:set_decompress(func)
+--     Sets a custom data decompression function. 'func' should be defined receiving a single string value and
+--     returning a single string value.
