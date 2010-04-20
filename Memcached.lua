@@ -39,7 +39,7 @@ local FLAGS = {
 }
 
 local function warn(str)
-    io.stderr:write(string.format('%s\n', tostring(str)))
+    io.stderr:write(string.format('Warning: %s\n', tostring(str)))
 end
 
 local function _select_server(cache, key)
@@ -179,8 +179,7 @@ local function _store(cache, op, key, value, expiry)
     local res = _send(cache, key, cmd)
 
     if res ~= 'STORED' then
-	error("Error storing '" .. key .. "': " .. res)
-	return false
+	return false, res
     end
 
     return true
@@ -211,8 +210,7 @@ local function delete(cache, key)
     end
 
     if res ~= 'DELETED' then
-	error("Error deleting '" .. key .. "': " .. res)
-	return false
+	return false, res
     end
 
     return true
@@ -224,7 +222,7 @@ local function incr(cache, key, val)
     local res = _send(cache, key, 'incr ' .. key .. ' ' .. val)
 
     if res == 'ERROR' or res == 'CLIENT_ERROR' then
-	error("Error incrementing '" .. key .. "': " .. res)
+        return false, res
     end
 
     return res
@@ -236,7 +234,7 @@ local function decr(cache, key, val)
     local res = _send(cache, key, 'decr ' .. key .. ' ' .. val)
 
     if res == 'ERROR' or res == 'CLIENT_ERROR' then
-	error("Error incrementing '" .. key .. "': " .. res)
+        return false, res
     end
 
     return res
