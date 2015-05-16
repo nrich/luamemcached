@@ -1,0 +1,1 @@
+A pure lua implementation of a simple memcached client.
