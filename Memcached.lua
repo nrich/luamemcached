@@ -20,8 +20,8 @@
 
 module('Memcached', package.seeall)
 
-require('socket')
-require('CRC32')
+local socket = require('socket')
+local CRC32 = require('CRC32')
 
 local SERVER_RETRIES = 10
 
