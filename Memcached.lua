@@ -109,6 +109,7 @@ local function _retrieve(cache, key, str)
 	    break
 	elseif string.sub(line, 1, 5) == 'VALUE' then
 	    local key,flagstr,size,cas = string.match(line, 'VALUE (%S+) (%d+) (%d+)')
+
 	    flags = extract_flags(flagstr)
 
 	    local data = server:receive(size)
@@ -276,6 +277,8 @@ end
 
 local function get_multi(cache, ...)
     local dataset = nil
+
+    local arg = table.pack(...)
 
     if table.maxn(cache.servers) > 1 then
 	dataset = {}
