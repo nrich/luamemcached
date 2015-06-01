@@ -18,7 +18,9 @@
 --OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS 
 --IN THE SOFTWARE.
 
-module('Memcached', package.seeall)
+local _M = {}
+
+local table = require('table')
 
 local socket = require('socket')
 local CRC32 = require('CRC32')
@@ -277,13 +279,12 @@ end
 
 local function get_multi(cache, ...)
     local dataset = nil
-
-    local arg = table.pack(...)
+    local arg = {...}
 
     if table.maxn(cache.servers) > 1 then
 	dataset = {}
 
-	for i,k in ipairs(arg) do
+	for i,k in ipairs(arg or table.pack(...)) do
 	    local data = _retrieve(cache, k, 'get ' .. k)
 	    dataset[k] = data[k]
 	end
@@ -342,7 +343,7 @@ local function set_decompress(cache, func)
     cache.decompress = func
 end
 
-function Connect(hostlist, port)
+function _M.Connect(hostlist, port)
     local servers = {}
 
     if type(hostlist) == 'table' then
@@ -462,9 +463,11 @@ function Connect(hostlist, port)
     return cache
 end
 
-function New(hostlist, port)
-    return Connect(hostlist, port)
+function _M.New(hostlist, port)
+    return _M.Connect(hostlist, port)
 end
+
+return _M
 
 -- 
 -- Memcached.lua

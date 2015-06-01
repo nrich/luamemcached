@@ -18,7 +18,7 @@
 --OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS 
 --IN THE SOFTWARE.
 
-module('CRC32', package.seeall)
+local _M = {}
 
 local max = 2^32 -1
 
@@ -135,7 +135,7 @@ local function rshift(num, right)
     return math.floor(res)
 end
 
-function Hash(str)
+function _M.Hash(str)
     local count = string.len(tostring(str))
     local crc = max
     
@@ -152,6 +152,7 @@ function Hash(str)
     return crc
 end
 
+return _M
 
 --
 -- CRC32.lua
