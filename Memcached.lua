@@ -91,7 +91,7 @@ local function _retrieve(cache, key, str)
 	local num = tonumber(str)
 	local flags = {}
 
-	for i = table.maxn(FLAGS), 1, -1 do
+	for i = #(FLAGS), 1, -1 do
 	    local bf = 2 ^ (i - 1)
 
 	    if num >= bf then
@@ -281,7 +281,7 @@ local function get_multi(cache, ...)
     local dataset = nil
     local arg = {...}
 
-    if table.maxn(cache.servers) > 1 then
+    if #(cache.servers) > 1 then
 	dataset = {}
 
 	for i,k in ipairs(arg or table.pack(...)) do
@@ -401,7 +401,7 @@ function _M.Connect(hostlist, port)
 	end
     end
 
-    if table.maxn(servers) < 1 then
+    if #(servers) < 1 then
 	error('No servers available')
     end
 
